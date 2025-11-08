@@ -1,0 +1,69 @@
+qlib_init:
+  provider_uri: "~/.qlib/qlib_data/cn_data"
+  region: cn
+
+data_handler_config: &data_handler_config
+  start_time: 2014-01-01
+  end_time: 2025-01-01
+  instruments: all
+  data_loader:
+    class: QlibDataLoader
+    module_path: qlib.data.dataset.loader
+    kwargs:
+      config:
+        feature:
+          - ["$open", "$high", "$low", "$close", "$volume"]
+      freq: day
+  learn_processors:
+    - class: GoldenBlackhorseSignal
+      module_path: qlib.data.dataset.processor
+  infer_processors:
+    - class: GoldenBlackhorseSignal
+      module_path: qlib.data.dataset.processor
+
+dataset:
+  class: DatasetH
+  module_path: qlib.data.dataset
+  kwargs:
+    handler:
+      class: DataHandlerLP
+      module_path: qlib.data.dataset.handler
+      kwargs: *data_handler_config
+    segments:
+      test: [2016-01-01, 2025-01-01]
+
+strategy:
+  class: GoldenBlackHorseStrategy
+  module_path: qlib.contrib.strategy
+  kwargs:
+    dataset: <DATASET>
+    body_threshold: 0.06
+    stop_loss_buffer: 0.03
+    take_profit: [0.15, 0.25]
+    initial_pos: 0.1
+    add_pos: 0.1
+    add_pullback: 0.03
+    entry_price_tolerance: 0.015
+    entry_expire_days: 3
+    max_pending: 300
+
+executor:
+  class: SimulatorExecutor
+  module_path: qlib.backtest.executor
+  kwargs:
+    time_per_step: day
+    generate_portfolio_metrics: true
+
+backtest:
+  start_time: 2018-01-01
+  end_time: 2024-12-31
+  benchmark: SH000300
+  account:
+    init_cash: 1000000
+  exchange_kwargs:
+    freq: day
+    limit_threshold: 0.095
+    deal_price: open
+    open_cost: 0.0005
+    close_cost: 0.0015
+    min_cost: 5
