@@ -225,6 +225,135 @@ class MinMaxNorm(Processor):
         return df
 
 
+class GoldenBlackhorseSignal(Processor):
+    """Generate features for the Golden Black Horse pattern.
+
+    This processor calculates the multi-day candlestick conditions described in the
+    strategy proposal and appends helper columns that are later consumed by the
+    trading logic.
+
+    Parameters
+    ----------
+    signal_name : str
+        Column name for the generated binary signal.
+    body_col : str
+        Column name for the third-day body percentage of the candlestick.
+    fast_entry_col : str
+        Column name for the aggressive entry anchor (used when the third-day
+        candlestick body exceeds the threshold).
+    slow_entry_col : str
+        Column name for the conservative entry anchor.
+    pattern_low_col : str
+        Column name that keeps the lowest price of the first bar in the pattern.
+    volume_ramp_limit : float
+        Upper bound of the third-day volume percentage change.
+    body_threshold : float
+        Threshold for switching between aggressive and conservative entries.
+    slippage_buffer : float
+        Additional multiplier applied when generating entry anchors.
+    """
+
+    def __init__(
+        self,
+        signal_name: str = "golden_blackhorse_signal",
+        body_col: str = "golden_blackhorse_body_pct",
+        fast_entry_col: str = "golden_blackhorse_fast_entry",
+        slow_entry_col: str = "golden_blackhorse_slow_entry",
+        pattern_low_col: str = "golden_blackhorse_pattern_low",
+        volume_ramp_limit: float = 1.0,
+        slippage_buffer: float = 0.005,
+    ) -> None:
+        self.signal_name = signal_name
+        self.body_col = body_col
+        self.fast_entry_col = fast_entry_col
+        self.slow_entry_col = slow_entry_col
+        self.pattern_low_col = pattern_low_col
+        self.volume_ramp_limit = volume_ramp_limit
+        self.slippage_buffer = slippage_buffer
+
+    @staticmethod
+    def _get_datetime_level(df: pd.DataFrame) -> str:
+        if isinstance(df.index, pd.MultiIndex):
+            if "datetime" in df.index.names:
+                return "datetime"
+            return df.index.names[0]
+        raise ValueError("GoldenBlackhorseSignal expects MultiIndex with datetime level")
+
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        if not isinstance(df.columns, pd.MultiIndex):
+            raise ValueError("GoldenBlackhorseSignal expects handler output with multi-index columns")
+
+        feature_cols = get_group_columns(df, "feature")
+        feature_view = df.loc[:, feature_cols].copy()
+        feature_view.columns = feature_view.columns.get_level_values(-1)
+
+        datetime_level = self._get_datetime_level(feature_view)
+        inst_levels = [lvl for lvl in feature_view.index.names if lvl != datetime_level]
+        if len(inst_levels) != 1:
+            raise ValueError("GoldenBlackhorseSignal currently supports a single instrument level")
+        inst_level = inst_levels[0]
+
+        close = feature_view["$close"]
+        open_ = feature_view["$open"]
+        high = feature_view["$high"]
+        low = feature_view["$low"]
+        volume = feature_view["$volume"]
+
+        is_positive = (close > open_).astype(float)
+        golden_3up = (
+            is_positive.groupby(level=inst_level)
+            .rolling(window=3)
+            .sum()
+            .droplevel(0)
+        ) == 3
+
+        close_new_high = (
+            close.groupby(level=inst_level)
+            .rolling(window=3)
+            .max()
+            .droplevel(0)
+        ) == close
+
+        high_diff = high.groupby(level=inst_level).diff()
+        low_diff = low.groupby(level=inst_level).diff()
+        price_strength = (high_diff > 0) & (low_diff > 0) & close_new_high
+
+        vol_pct = volume.groupby(level=inst_level).pct_change()
+
+        def _vol_condition(series: pd.Series) -> pd.Series:
+            def _apply(window: pd.Series) -> float:
+                if window.isna().any():
+                    return 0.0
+                return float((window.iloc[-2] > 0) and (window.iloc[-1] > 0) and (window.iloc[-1] < self.volume_ramp_limit))
+
+            return series.rolling(window=3).apply(_apply, raw=False)
+
+        vol_condition = (
+            vol_pct.groupby(level=inst_level)
+            .apply(_vol_condition)
+            .droplevel(0)
+        ).astype(bool)
+
+        body_pct = (close - open_) / open_
+
+        fast_entry = ((close + open_) / 2) * (1 + self.slippage_buffer)
+
+        rolling_open = open_.groupby(level=inst_level).rolling(window=3).mean().droplevel(0)
+        rolling_close = close.groupby(level=inst_level).rolling(window=3).mean().droplevel(0)
+        slow_entry = ((rolling_close + rolling_open) / 2) * (1 + self.slippage_buffer)
+
+        pattern_low = low.groupby(level=inst_level).shift(2)
+
+        signal = (golden_3up & vol_condition & price_strength).astype(float)
+
+        df["feature", self.signal_name] = signal
+        df["feature", self.body_col] = body_pct
+        df["feature", self.fast_entry_col] = fast_entry
+        df["feature", self.slow_entry_col] = slow_entry
+        df["feature", self.pattern_low_col] = pattern_low
+        return df
+
+
 class ZScoreNorm(Processor):
     """ZScore Normalization"""
 

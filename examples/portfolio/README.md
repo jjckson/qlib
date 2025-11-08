@@ -45,3 +45,26 @@ You can finish workflow with `EnhancedIndexingStrategy` by running
 
 In this config, we mainly changed the strategy section compared to
 `qlib/examples/benchmarks/workflow_config_lightgbm_Alpha158.yaml`.
+
+## Golden Black Horse 日频策略
+
+`config_golden_blackhorse.yaml` 展示了如何在全 A 股上复现“黄金黑马”模式：
+
+1. **准备数据**：可使用 `scripts/data_collector/akshare_cn_stock` 目录下的脚本通过 AkShare 下载日线行情，并配合 `scripts/dump_bin.py` 导入 Qlib 数据目录。
+2. **运行回测**：
+
+   ```bash
+   python examples/portfolio/run_golden_blackhorse.py \
+     --config examples/portfolio/config_golden_blackhorse.yaml \
+     --output outputs/golden_blackhorse
+   ```
+
+   脚本会自动加载配置文件中的数据集、策略与执行器设置，完成回测并输出组合表现及风险指标；如指定 `--output`，同时会保存投资组合报告与仓位明细。
+
+策略核心逻辑在 `qlib/contrib/strategy/golden_blackhorse.py`，使用 `GoldenBlackhorseSignal` 处理器（定义于 `qlib/data/dataset/processor.py`）计算 3 日 K 线特征并生成买入信号。策略实现支持：
+
+- 信号触发后的分批建仓（初始 10% 仓位 + 回撤加仓）；
+- 基于形态低点的动态止损，以及 15%–25% 的可调止盈目标；
+- 买入价格容忍区间与信号失效天数的参数化控制。
+
+通过调整配置文件即可快速探索不同的止盈/止损、加仓阈值或回测区间。
